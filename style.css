@@ -264,7 +264,7 @@ body {
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  /*gap: 6px;*/
 }
 
 .field label {
