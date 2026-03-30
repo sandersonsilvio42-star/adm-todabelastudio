@@ -3,7 +3,7 @@ import {
     db, $, showNotification, mainModal,
     state, generateHours, toKey,
     waitForAuth, getSelectedColecao, getProfLabelByColecao,
-    setDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, collection, query, where, serverTimestamp,
+    setDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, collection, query, where, serverTimestamp, onSnapshot,
     PAYMENT_METHODS, BOOKING_URL,
     openServicosModal,
     bindProfessionalSync,
@@ -24,6 +24,11 @@ export function initAgendaTab() {
     // evita duplicar listeners
     if (window.__agendaTabStarted) return;
     window.__agendaTabStarted = true;
+
+    // ============================
+    // Listener em tempo real para agendamentos
+    // ============================
+    let currentAgendaUnsubscribe = null;
 
     // ============================
     // CONFIG: passo padrão 30min
@@ -571,16 +576,62 @@ export function initAgendaTab() {
         const ymd = dataFiltro?.value;
         if (!ymd) return;
 
+        // Para o listener anterior se existir
+        if (currentAgendaUnsubscribe) {
+            currentAgendaUnsubscribe();
+            currentAgendaUnsubscribe = null;
+        }
+
         try {
             agendaGrid.innerHTML = `<div class="loading-row">Carregando...</div>`;
 
             await fillHoraFiltroDynamic({ keepSelection: true });
 
-            const apps = await fetchAppointmentsDay(ymd);
-            const filterHour = horaFiltro?.value || "";
             const colecaoSel = getSelectedColecao();
 
-            await renderAgendaGrid(apps, filterHour, ymd, colecaoSel);
+            // Configura listener em tempo real
+            const qy = colecaoSel === "todos"
+                ? null // Para "todos", vamos configurar múltiplos listeners
+                : query(collection(db, colecaoSel), where("data", "==", ymd));
+
+            if (colecaoSel === "todos") {
+                // Para "todos", precisamos de listeners para cada profissional
+                const profs = (state.PROFESSIONALS || []).filter((p) => p && p.ativo !== false);
+                const unsubscribes = [];
+
+                const updateAllAppointments = async () => {
+                    const tasks = profs.map((p) => fetchAppointmentsDayForColecao(ymd, p.colecao));
+                    const results = await Promise.all(tasks);
+                    const rows = results.flat();
+                    rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+                    const filterHour = horaFiltro?.value || "";
+                    await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
+                };
+
+                // Listener para cada coleção
+                for (const p of profs) {
+                    const q = query(collection(db, p.colecao), where("data", "==", ymd));
+                    const unsubscribe = onSnapshot(q, async (snap) => {
+                        await updateAllAppointments();
+                    });
+                    unsubscribes.push(unsubscribe);
+                }
+
+                currentAgendaUnsubscribe = () => {
+                    unsubscribes.forEach(unsub => unsub());
+                };
+
+                // Carrega inicial
+                await updateAllAppointments();
+            } else {
+                // Listener para coleção específica
+                currentAgendaUnsubscribe = onSnapshot(qy, async (snap) => {
+                    const rows = await fetchAppointmentsDayForColecao(ymd, colecaoSel);
+                    rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+                    const filterHour = horaFiltro?.value || "";
+                    await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
+                });
+            }
         } catch (err) {
             console.error(err);
             agendaGrid.innerHTML = `<div class="loading-row">Erro ao carregar agenda.</div>`;
