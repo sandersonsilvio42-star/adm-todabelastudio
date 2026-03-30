@@ -1188,5 +1188,5 @@ body {
     grid-template-columns: 1fr;
   }
   .tabs-in-header {
-    display: column
+    display: table-column
 }
