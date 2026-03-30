@@ -29,6 +29,40 @@ export function initAgendaTab() {
     // Listener em tempo real para agendamentos
     // ============================
     let currentAgendaUnsubscribe = null;
+    let globalAgendaUnsubscribes = new Map(); // Map<colecao_data, unsubscribe>
+
+    // Função para configurar listener global para uma coleção e data
+    function setupGlobalListenerForDate(colecao, ymd) {
+        const key = `${colecao}_${ymd}`;
+        if (globalAgendaUnsubscribes.has(key)) return; // Já configurado
+
+        const q = query(collection(db, colecao), where("data", "==", ymd));
+        const unsubscribe = onSnapshot(q, async (snap) => {
+            console.log(`[AGENDA GLOBAL] Listener triggered for ${colecao} on ${ymd}, changes:`, snap.docChanges().length);
+            // Só atualiza se a agenda estiver mostrando esta data e coleção
+            const currentYmd = dataFiltro?.value;
+            const currentColecao = getSelectedColecao();
+            if (currentYmd === ymd && (currentColecao === colecao || currentColecao === "todos")) {
+                await buscarAgenda(); // Recarrega a agenda atual
+            }
+        });
+        globalAgendaUnsubscribes.set(key, unsubscribe);
+    }
+
+    // Configura listeners para as próximas datas (hoje + próximos 30 dias)
+    function setupGlobalListeners() {
+        const profs = (state.PROFESSIONALS || []).filter((p) => p && p.ativo !== false);
+        const today = new Date();
+        for (let i = 0; i < 30; i++) {
+            const date = new Date(today);
+            date.setDate(today.getDate() + i);
+            const ymd = date.toISOString().split('T')[0];
+            profs.forEach(p => setupGlobalListenerForDate(p.colecao, ymd));
+        }
+    }
+
+    // Chama uma vez para configurar
+    setupGlobalListeners();
 
     // ============================
     // CONFIG: passo padrão 30min
@@ -589,48 +623,20 @@ export function initAgendaTab() {
 
             const colecaoSel = getSelectedColecao();
 
-            // Configura listener em tempo real
-            const qy = colecaoSel === "todos"
-                ? null // Para "todos", vamos configurar múltiplos listeners
-                : query(collection(db, colecaoSel), where("data", "==", ymd));
-
+            // Carrega os dados (os listeners globais cuidarão das atualizações)
             if (colecaoSel === "todos") {
-                // Para "todos", precisamos de listeners para cada profissional
                 const profs = (state.PROFESSIONALS || []).filter((p) => p && p.ativo !== false);
-                const unsubscribes = [];
-
-                const updateAllAppointments = async () => {
-                    const tasks = profs.map((p) => fetchAppointmentsDayForColecao(ymd, p.colecao));
-                    const results = await Promise.all(tasks);
-                    const rows = results.flat();
-                    rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
-                    const filterHour = horaFiltro?.value || "";
-                    await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
-                };
-
-                // Listener para cada coleção
-                for (const p of profs) {
-                    const q = query(collection(db, p.colecao), where("data", "==", ymd));
-                    const unsubscribe = onSnapshot(q, async (snap) => {
-                        await updateAllAppointments();
-                    });
-                    unsubscribes.push(unsubscribe);
-                }
-
-                currentAgendaUnsubscribe = () => {
-                    unsubscribes.forEach(unsub => unsub());
-                };
-
-                // Carrega inicial
-                await updateAllAppointments();
+                const tasks = profs.map((p) => fetchAppointmentsDayForColecao(ymd, p.colecao));
+                const results = await Promise.all(tasks);
+                const rows = results.flat();
+                rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+                const filterHour = horaFiltro?.value || "";
+                await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
             } else {
-                // Listener para coleção específica
-                currentAgendaUnsubscribe = onSnapshot(qy, async (snap) => {
-                    const rows = await fetchAppointmentsDayForColecao(ymd, colecaoSel);
-                    rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
-                    const filterHour = horaFiltro?.value || "";
-                    await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
-                });
+                const rows = await fetchAppointmentsDayForColecao(ymd, colecaoSel);
+                rows.sort((a, b) => (a.hora || "").localeCompare(b.hora || ""));
+                const filterHour = horaFiltro?.value || "";
+                await renderAgendaGrid(rows, filterHour, ymd, colecaoSel);
             }
         } catch (err) {
             console.error(err);
