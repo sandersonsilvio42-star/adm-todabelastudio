@@ -455,6 +455,8 @@ function startGlobalListeners() {
         "[GLOBAL] profissionais:",
         list.map((p) => ({ id: p.id, nome: p.nome, colecao: p.colecao, ativo: p.ativo }))
       );
+      // Configura listeners globais da agenda após carregar profissionais
+      if (window.setupGlobalListeners) window.setupGlobalListeners();
     },
     (err) => console.error("Erro listener profissionais (global):", err)
   );

@@ -36,6 +36,7 @@ export function initAgendaTab() {
         const key = `${colecao}_${ymd}`;
         if (globalAgendaUnsubscribes.has(key)) return; // Já configurado
 
+        console.log(`[AGENDA] Configurando listener global para ${colecao} em ${ymd}`);
         const q = query(collection(db, colecao), where("data", "==", ymd));
         const unsubscribe = onSnapshot(q, async (snap) => {
             console.log(`[AGENDA GLOBAL] Listener triggered for ${colecao} on ${ymd}, changes:`, snap.docChanges().length);
@@ -52,17 +53,21 @@ export function initAgendaTab() {
     // Configura listeners para as próximas datas (hoje + próximos 30 dias)
     function setupGlobalListeners() {
         const profs = (state.PROFESSIONALS || []).filter((p) => p && p.ativo !== false);
+        console.log('[AGENDA] Configurando listeners globais para', profs.length, 'profissionais');
         const today = new Date();
         for (let i = 0; i < 30; i++) {
             const date = new Date(today);
             date.setDate(today.getDate() + i);
             const ymd = date.toISOString().split('T')[0];
-            profs.forEach(p => setupGlobalListenerForDate(p.colecao, ymd));
+            profs.forEach(p => {
+                console.log(`[AGENDA] Configurando listener para ${p.colecao} em ${ymd}`);
+                setupGlobalListenerForDate(p.colecao, ymd);
+            });
         }
     }
 
-    // Chama uma vez para configurar
-    setupGlobalListeners();
+    // Chama uma vez para configurar (será chamado após profissionais carregarem)
+    window.setupGlobalListeners = setupGlobalListeners;
 
     // ============================
     // CONFIG: passo padrão 30min
