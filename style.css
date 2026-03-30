@@ -1183,7 +1183,7 @@ body {
   gap: 10px;
 }
 
-@media (max-width: 710px) {
+@media (max-width: 730px) {
   .shift-grid {
     grid-template-columns: 1fr;
   }
