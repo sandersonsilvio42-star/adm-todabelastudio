@@ -1183,8 +1183,10 @@ body {
   gap: 10px;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 710px) {
   .shift-grid {
     grid-template-columns: 1fr;
   }
+  .tabs-in-header {
+    display: colluns
 }
