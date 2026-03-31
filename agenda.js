@@ -155,6 +155,27 @@ export function initAgendaTab() {
         return dt.getDay(); // 0 dom ... 6 sab
     }
 
+    // Função para gerar datas recorrentes
+    function gerarDatasRecorrentes(dataInicial, tipo, vezes) {
+        const datas = [];
+        const data = new Date(dataInicial + 'T00:00:00');
+        
+        for (let i = 0; i < vezes; i++) {
+            const ymd = data.toISOString().split('T')[0];
+            datas.push(ymd);
+            
+            if (tipo === 'semanal') {
+                data.setDate(data.getDate() + 7);
+            } else if (tipo === 'quinzenal') {
+                data.setDate(data.getDate() + 14);
+            } else if (tipo === 'mensal') {
+                data.setMonth(data.getMonth() + 1);
+            }
+        }
+        
+        return datas;
+    }
+
     // ============================
     // Exceções: tenta ler em múltiplos formatos
     // ============================
@@ -766,6 +787,21 @@ export function initAgendaTab() {
           <div class="field">
             <label><input id="newRaclub" type="checkbox" /> Cliente é do RA Club</label>
           </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label><input id="newRecorrente" type="checkbox" /> Agendamento recorrente</label>
+            <div id="newRecorrenciaOptions" class="recorrencia-options" style="display: none; margin-top: 10px;">
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <label style="font-size: 13px;">Repetir:</label>
+                <select id="newRecorrenciaTipo" style="flex: 1;">
+                  <option value="semanal">Semanalmente</option>
+                  <option value="quinzenal">A cada 2 semanas</option>
+                  <option value="mensal">Mensalmente</option>
+                </select>
+                <label style="font-size: 13px;">Vezes:</label>
+                <input id="newRecorrenciaVezes" type="number" min="2" max="12" value="4" style="width: 60px;" />
+              </div>
+            </div>
+          </div>
         </div>
       `,
             buttons: [
@@ -786,47 +822,60 @@ export function initAgendaTab() {
                         const forma = $("#newForma").value || "Outro";
                         const raclub = $("#newRaclub").checked;
                         const ymd = dataFiltro.value;
+                        const isRecorrente = $("#newRecorrente")?.checked;
+                        const recorrenciaTipo = $("#newRecorrenciaTipo")?.value || 'semanal';
+                        const recorrenciaVezes = parseInt($("#newRecorrenciaVezes")?.value) || 4;
 
                         const tempoMin = Number($("#newTempoMin")?.value || 30) || 30;
 
-                        // valida conflito por duração do serviço (dinâmico)
-                        try {
-                            const av = await getDayAvailabilityForColecao(ymd, colecao);
-                            if (!av.aberto) {
-                                showNotification("Dia fechado para este profissional.", "error");
-                                return false;
-                            }
-
-                            const dayApps = await fetchAppointmentsDayForColecao(ymd, colecao);
-
-                            const ok = canPlaceServiceAtTime({
-                                startHH: time,
-                                serviceMin: tempoMin,
-                                dayStartHH: av.inicio,
-                                dayEndHH: av.fim,
-                                appointments: dayApps
-                            });
-
-                            if (!ok) {
-                                showNotification("Esse horário conflita com outro agendamento/bloqueio pelo tempo do serviço.", "error");
-                                return false;
-                            }
-                        } catch (e) {
-                            console.error(e);
-                            showNotification("Não foi possível validar conflito de horário.", "error");
-                            return false;
+                        // Gerar datas do agendamento
+                        let datasAgendamento = [ymd];
+                        if (isRecorrente) {
+                            datasAgendamento = gerarDatasRecorrentes(ymd, recorrenciaTipo, recorrenciaVezes);
                         }
 
-                        const id = toKey(ymd, time);
-                        const refDoc = doc(db, colecao, id);
+                        // Validar conflitos para todas as datas
+                        for (const dataAgend of datasAgendamento) {
+                            try {
+                                const av = await getDayAvailabilityForColecao(dataAgend, colecao);
+                                if (!av.aberto) {
+                                    showNotification(`Dia ${new Date(dataAgend + 'T00:00:00').toLocaleDateString('pt-BR')} fechado para este profissional.`, "error");
+                                    return false;
+                                }
+
+                                const dayApps = await fetchAppointmentsDayForColecao(dataAgend, colecao);
+
+                                const ok = canPlaceServiceAtTime({
+                                    startHH: time,
+                                    serviceMin: tempoMin,
+                                    dayStartHH: av.inicio,
+                                    dayEndHH: av.fim,
+                                    appointments: dayApps
+                                });
+
+                                if (!ok) {
+                                    showNotification(`Horário conflita com outro agendamento em ${new Date(dataAgend + 'T00:00:00').toLocaleDateString('pt-BR')}.`, "error");
+                                    return false;
+                                }
+                            } catch (e) {
+                                console.error(e);
+                                showNotification("Não foi possível validar conflito de horário.", "error");
+                                return false;
+                            }
+                        }
+
                         const [firstName, ...rest] = cliente.split(" ");
                         const lastName = rest.join(" ");
 
                         try {
-                            await setDoc(
-                                refDoc,
-                                {
-                                    data: ymd,
+                            // Salvar todos os agendamentos
+                            const batch = writeBatch(db);
+                            datasAgendamento.forEach((dataAgend, index) => {
+                                const id = toKey(dataAgend, time);
+                                const refDoc = doc(db, colecao, id);
+                                
+                                const agendamentoData = {
+                                    data: dataAgend,
                                     hora: time,
                                     profissional: profLabel,
                                     clienteNomeCompleto: cliente,
@@ -843,10 +892,25 @@ export function initAgendaTab() {
                                     raclub: { status: raclub ? "membro" : "nao" },
                                     updatedAt: serverTimestamp(),
                                     createdAt: serverTimestamp(),
-                                },
-                                { merge: true }
-                            );
-                            showNotification("Agendamento criado!", "success");
+                                };
+                                
+                                if (isRecorrente) {
+                                    agendamentoData.recorrente = {
+                                        tipo: recorrenciaTipo,
+                                        vezes: datasAgendamento.length,
+                                        sequencia: index + 1
+                                    };
+                                }
+                                
+                                batch.set(refDoc, agendamentoData, { merge: true });
+                            });
+
+                            await batch.commit();
+                            
+                            const msg = isRecorrente ? 
+                                `${datasAgendamento.length} agendamentos recorrentes criados!` : 
+                                "Agendamento criado!";
+                            showNotification(msg, "success");
                             await buscarAgenda();
                         } catch (err) {
                             console.error(err);
@@ -876,6 +940,15 @@ export function initAgendaTab() {
             };
             servicoInput.addEventListener("click", openPicker);
             servicoInput.addEventListener("focus", openPicker);
+        }
+
+        // Event listener para recorrência
+        const recorrenteCheck = $("#newRecorrente");
+        const recorrenciaOptions = $("#newRecorrenciaOptions");
+        if (recorrenteCheck && recorrenciaOptions) {
+            recorrenteCheck.addEventListener("change", () => {
+                recorrenciaOptions.style.display = recorrenteCheck.checked ? "block" : "none";
+            });
         }
     }
 
